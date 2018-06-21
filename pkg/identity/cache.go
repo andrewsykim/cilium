@@ -119,20 +119,28 @@ func LookupIdentity(lbls labels.Labels) *Identity {
 // LookupReservedIdentityByLabels looks up a reserved identity by its labels and
 // returns it if found. Returns nil if not found.
 func LookupReservedIdentityByLabels(lbls labels.Labels) *Identity {
-	// If there is only one label with the "reserved" source and a well-known
-	// key, return the well-known identity for that key.
-	if len(lbls) != 1 {
+	var (
+		idty                *Identity
+		containsNonReserved bool
+	)
+	for _, lbl := range lbls {
+		switch {
+		case lbl.Key == labels.LabelKeyFixedIdentity:
+			if id := GetReservedID(lbl.Value); id != IdentityUnknown {
+				return LookupReservedIdentity(id)
+			}
+		case lbl.Source != labels.LabelSourceReserved:
+			containsNonReserved = true
+		case idty == nil:
+			if id := GetReservedID(lbl.Key); id != IdentityUnknown {
+				idty = LookupReservedIdentity(id)
+			}
+		}
+	}
+	if containsNonReserved {
 		return nil
 	}
-	for _, lbl := range lbls {
-		if lbl.Source != labels.LabelSourceReserved {
-			return nil
-		}
-		if id := GetReservedID(lbl.Key); id != IdentityUnknown {
-			return LookupReservedIdentity(id)
-		}
-	}
-	return nil
+	return idty
 }
 
 // LookupReservedIdentity looks up a reserved identity by its labels and
