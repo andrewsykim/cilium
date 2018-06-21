@@ -139,6 +139,10 @@ const (
 
 	// LabelSourceReservedKeyPrefix is the prefix of a reserved label
 	LabelSourceReservedKeyPrefix = LabelSourceReserved + "."
+
+	// LabelKeyFixedIdentity is the label that can be used to define a fixed
+	// identity.
+	LabelKeyFixedIdentity = "io.cilium.fixed-identity"
 )
 
 // Label is the cilium's representation of a container label.
