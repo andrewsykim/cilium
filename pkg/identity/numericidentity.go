@@ -26,6 +26,10 @@ const (
 	// used for reserved purposes.
 	MinimalNumericIdentity = NumericIdentity(256)
 
+	// UserReservedNumericIdentity represents the minimal numeric identity that
+	// can be used by users for reserved purposes.
+	UserReservedNumericIdentity = NumericIdentity(128)
+
 	// InvalidIdentity is the identity assigned if the identity is invalid
 	// or not determined yet
 	InvalidIdentity = NumericIdentity(0)
@@ -70,6 +74,41 @@ var (
 		ReservedIdentityInit:    labels.IDNameInit,
 	}
 )
+
+// IsUserReservedIdentity returns true if the given NumericIdentity belongs
+// to the space reserved for users.
+func IsUserReservedIdentity(id NumericIdentity) bool {
+	return id.Uint32() >= UserReservedNumericIdentity.Uint32() &&
+		id.Uint32() < MinimalNumericIdentity.Uint32()
+}
+
+// AddReservedNumericIdentity adds the given numeric identity and respective
+// label to the list of reservedIdentities. If the numeric identity is not
+// between 128 and 256 it will not be added.
+func AddReservedNumericIdentity(identity NumericIdentity, label string) {
+	if !IsUserReservedIdentity(identity) {
+		return
+	}
+	reservedIdentitiesMutex.Lock()
+	defer reservedIdentitiesMutex.Unlock()
+	reservedIdentities[label] = identity
+	reservedIdentityNames[identity] = label
+}
+
+// DelReservedNumericIdentity deletes the given Numeric Identity from the list
+// of reservedIdentities.
+func DelReservedNumericIdentity(identity NumericIdentity) {
+	if !IsUserReservedIdentity(identity) {
+		return
+	}
+	reservedIdentitiesMutex.Lock()
+	defer reservedIdentitiesMutex.Unlock()
+	label, ok := reservedIdentityNames[identity]
+	if ok {
+		delete(reservedIdentities, label)
+		delete(reservedIdentityNames, identity)
+	}
+}
 
 // NumericIdentity is the numeric representation of a security identity / a
 // security policy.
