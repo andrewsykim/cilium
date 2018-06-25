@@ -339,6 +339,7 @@ sed -i '10s+.*+ExecStart=/usr/bin/cilium-agent --debug \$CILIUM_OPTS+' /lib/syst
 echo "K8S_NODE_NAME=\$(hostname)" >> /etc/sysconfig/cilium
 echo 'CILIUM_OPTS="${ubuntu_1604_cilium_lb} ${ubuntu_1604_interface} ${cilium_options}"' >> /etc/sysconfig/cilium
 echo 'PATH=/usr/local/clang/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin' >> /etc/sysconfig/cilium
+echo 'CILIUM_DISABLE_ENVOY_BUILD=1' >> /etc/sysconfig/cilium
 chmod 644 /etc/sysconfig/cilium
 
 # Wait for the node to have a podCIDR so that cilium can use the podCIDR
@@ -511,42 +512,6 @@ function vboxnet_addr_finder(){
                 break
             fi
         done <<< "${all_ipv6}"
-    fi
-    if [[ -z "${found}" ]]; then
-        echo "WARN: VirtualBox interface with \"${IPV6_PUBLIC_CIDR}\" not found"
-        if [ ${YES_TO_ALL} -eq "0" ]; then
-            read -r -p "Create a new VBox hostonly network interface? [y/N] " response
-        else
-            response="Y"
-        fi
-        case "${response}" in
-            [yY])
-                echo "Creating VBox hostonly network..."
-            ;;
-            *)
-                exit
-            ;;
-        esac
-        vboxnet_create_new_interface vboxnetname
-        if [ -z "${vboxnet_interface}" ]; then
-            exit 1
-        fi
-    elif [[ "${net_mask}" -ne 64 ]]; then
-        echo "WARN: VirtualBox interface with \"${IPV6_PUBLIC_CIDR}\" found in ${vboxnetname}"
-        echo "but set wrong network mask (${net_mask} instead of 64)"
-        if [ ${YES_TO_ALL} -eq "0" ]; then
-            read -r -p "Change network mask of '${vboxnetname}' to 64? [y/N] " response
-        else
-            response="Y"
-        fi
-        case "${response}" in
-            [yY])
-                echo "Changing network mask to 64..."
-            ;;
-            *)
-                exit
-            ;;
-        esac
     fi
     split_ipv4 ipv4_array_nfs "${MASTER_IPV4_NFS}"
     IPV4_BASE_ADDR_NFS="$(printf "%d.%d.%d.1" "${ipv4_array_nfs[0]}" "${ipv4_array_nfs[1]}" "${ipv4_array_nfs[2]}")"

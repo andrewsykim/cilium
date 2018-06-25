@@ -61,7 +61,7 @@ rm -fr ~/go/bin/cilium*
 SCRIPT
 
 $install = <<SCRIPT
-sudo -E make -C /home/vagrant/go/src/github.com/cilium/cilium/ install
+sudo -E CILIUM_DISABLE_ENVOY_BUILD=1 make -C /home/vagrant/go/src/github.com/cilium/cilium/ install
 
 sudo mkdir -p /etc/sysconfig
 sudo cp /home/vagrant/go/src/github.com/cilium/cilium/contrib/systemd/cilium-consul.service /lib/systemd/system
