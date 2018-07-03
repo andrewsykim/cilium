@@ -46,5 +46,10 @@ func ConfigureLocalNode() error {
 
 	UpdateNode(Identity{Name: localNode.Name}, &localNode, TunnelRoute, nil)
 
-	return registerNode()
+	go func() {
+		if err := registerNode(); err != nil {
+			log.WithError(err).Fatal("Unable to initialize local node")
+		}
+	}()
+	return nil
 }
