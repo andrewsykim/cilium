@@ -25,10 +25,14 @@ func GetLocalNode() *Node {
 	return &localNode
 }
 
+type owner interface {
+	StopK8sWatcher(string)
+}
+
 // ConfigureLocalNode configures the local node. This is called on agent
 // startup to configure the local node based on the configuration options
 // passed to the agent
-func ConfigureLocalNode() error {
+func ConfigureLocalNode(owner owner) error {
 	localNode = Node{
 		Name:    nodeName,
 		cluster: &clusterConf,
@@ -50,6 +54,7 @@ func ConfigureLocalNode() error {
 		if err := registerNode(); err != nil {
 			log.WithError(err).Fatal("Unable to initialize local node")
 		}
+		owner.StopK8sWatcher("nodes")
 	}()
 	return nil
 }

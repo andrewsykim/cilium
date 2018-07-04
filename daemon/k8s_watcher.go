@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/cilium/cilium/common/types"
+	"github.com/cilium/cilium/pkg/annotation"
 	"github.com/cilium/cilium/pkg/comparator"
 	"github.com/cilium/cilium/pkg/controller"
 	"github.com/cilium/cilium/pkg/endpoint"
@@ -85,6 +86,11 @@ var (
 	ciliumUpdateStatusVerConstr, _ = go_version.NewConstraint(">= 1.11.0")
 
 	k8sCM = controller.NewManager()
+
+	watcherChannelsMutex lock.Mutex
+	watcherChannels      = map[string]chan struct{}{
+		"nodes": make(chan struct{}),
+	}
 )
 
 // k8sAPIGroupsUsed is a lockable map to hold which k8s API Groups we have
@@ -241,6 +247,7 @@ func (d *Daemon) EnableK8sWatcher(reSyncPeriod time.Duration) error {
 	serEps := serializer.NewFunctionQueue(20)
 	serCNPs := serializer.NewFunctionQueue(20)
 	serPods := serializer.NewFunctionQueue(1024)
+	serNodes := serializer.NewFunctionQueue(20)
 
 	switch {
 	case networkPolicyV1VerConstr.Check(k8sServerVer):
@@ -487,6 +494,52 @@ func (d *Daemon) EnableK8sWatcher(reSyncPeriod time.Duration) error {
 	)
 	go podsController.Run(wait.NeverStop)
 	d.k8sAPIGroups.addAPI(k8sAPIGroupPodV1Core)
+
+	_, nodesController := cache.NewInformer(
+		cache.NewListWatchFromClient(k8s.Client().CoreV1().RESTClient(),
+			"nodes", v1.NamespaceAll, fields.Everything()),
+		&v1.Node{},
+		reSyncPeriod,
+		cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj interface{}) {
+				metrics.SetTSValue(metrics.EventTSK8s, time.Now())
+				if k8sNode := copyObjToV1Node(obj); k8sNode != nil {
+					serNodes.Enqueue(func() error {
+						d.addK8sNodeV1(k8sNode)
+						return nil
+					}, serializer.NoRetry)
+				}
+			},
+			UpdateFunc: func(oldObj, newObj interface{}) {
+				metrics.SetTSValue(metrics.EventTSK8s, time.Now())
+				if oldK8sNode := copyObjToV1Node(oldObj); oldK8sNode != nil {
+					if newK8sNode := copyObjToV1Node(newObj); newK8sNode != nil {
+						serNodes.Enqueue(func() error {
+							d.updateK8sNodeV1(oldK8sNode, newK8sNode)
+							return nil
+						}, serializer.NoRetry)
+					}
+				}
+			},
+			DeleteFunc: func(obj interface{}) {
+				metrics.SetTSValue(metrics.EventTSK8s, time.Now())
+				if k8sNode := copyObjToV1Node(obj); k8sNode != nil {
+					serNodes.Enqueue(func() error {
+						d.deleteK8sNodeV1(k8sNode)
+						return nil
+					}, serializer.NoRetry)
+				}
+			},
+		},
+	)
+
+	watcherChannelsMutex.Lock()
+	wc, ok := watcherChannels["nodes"]
+	if ok {
+		go nodesController.Run(wc)
+	}
+	watcherChannelsMutex.Unlock()
+	d.k8sAPIGroups.addAPI(k8sAPIGroupNodeV1Core)
 
 	endpoint.RunK8sCiliumEndpointSyncGC()
 
@@ -1605,4 +1658,64 @@ func (d *Daemon) updateK8sPodV1(oldK8sPod, newK8sPod *v1.Pod) {
 
 func (d *Daemon) deleteK8sPodV1(oldK8sPod *v1.Pod) {
 	deletePodHostIP(oldK8sPod)
+}
+
+func (d *Daemon) StopK8sWatcher(w string) {
+	//	watcherChannelsMutex.Lock()
+	//	wc, ok := watcherChannels[w]
+	//	if ok {
+	//		close(wc)
+	//		delete(watcherChannels, w)
+	//	}
+	//	watcherChannelsMutex.Unlock()
+}
+
+func (d *Daemon) addK8sNodeV1(k8sNode *v1.Node) {
+	logger := log.WithFields(logrus.Fields{
+		"K8sNodeName": k8sNode.ObjectMeta.Name,
+	})
+
+	ciliumIP := net.ParseIP(k8sNode.GetAnnotations()[annotation.CiliumHostIP])
+	if ciliumIP == nil {
+		logger.Debugf("Skipping ipcache update, no/invalid HostIP: %s", k8sNode.GetAnnotations()[annotation.CiliumHostIP])
+		return
+	}
+
+	key := bpfIPCache.NewKey(ciliumIP, nil)
+	value := bpfIPCache.RemoteEndpointInfo{
+		SecurityIdentity: uint16(identity.ReservedIdentityCluster),
+	}
+
+	n := k8s.ParseNode(k8sNode)
+
+	var hostIP net.IP
+	if n.Name != node.GetName() {
+		hostIP = n.GetNodeIP(false)
+	}
+	ip4 := hostIP.To4()
+	if ip4 == nil {
+		logger.Debugf("Skipping ipcache update, HostIP is not an IPv4 address %+v %+v", hostIP, n)
+		return
+	}
+
+	copy(value.TunnelEndpoint[:], ip4)
+
+	err := bpfIPCache.IPCache.Update(&key, &value)
+	if err != nil {
+		logger.WithError(err).WithFields(logrus.Fields{"key": key.String(),
+			"value": value.String()}).
+			Warning("Unable to update ipcache bpf map")
+	}
+
+	logger.WithFields(logrus.Fields{"key": key.String(), "value": value.String()}).
+		Debug("Updated ipcache entry for node")
+
+}
+
+func (d *Daemon) updateK8sNodeV1(_, k8sNode *v1.Node) {
+	return
+}
+
+func (d *Daemon) deleteK8sNodeV1(k8sNode *v1.Node) {
+	return
 }
