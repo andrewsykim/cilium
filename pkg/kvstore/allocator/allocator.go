@@ -49,7 +49,7 @@ const (
 
 	// listTimeout is the time to wait for the initial list operation to
 	// succeed when creating a new allocator
-	listTimeout = 2 * time.Minute
+	listTimeout = 3 * time.Minute
 
 	// gcInterval is the interval in which allocator identities are
 	// attempted to be expired from the kvstore
@@ -282,9 +282,7 @@ func NewAllocator(basePath string, typ AllocatorKey, opts ...AllocatorOption) (*
 		return nil, errors.New("Maximum ID must be greater than minimum ID")
 	}
 
-	if err := a.startWatchAndWait(); err != nil {
-		return nil, err
-	}
+	a.startWatch()
 
 	a.startGC()
 

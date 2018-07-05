@@ -149,9 +149,18 @@ func (d *Daemon) regenerateRestoredEndpoints(state *endpointRestoreState) {
 		ep.Mutex.RUnlock()
 
 		go func(ep *endpoint.Endpoint, epRegenerated chan<- bool) {
-			ep.Mutex.Lock()
-
+			ep.Mutex.RLock()
 			scopedLog := log.WithField(logfields.EndpointID, ep.ID)
+			// Filter the restored labels with the new daemon's filter
+			l, _ := labels.FilterLabels(ep.OpLabels.IdentityLabels())
+			ep.Mutex.RUnlock()
+
+			identity, _, err := identityPkg.AllocateIdentity(l)
+			if err != nil {
+				scopedLog.WithError(err).Warn("Unable to restore endpoint")
+				epRegenerated <- false
+			}
+			ep.Mutex.Lock()
 
 			state := ep.GetStateLocked()
 			if state == endpoint.StateDisconnected || state == endpoint.StateDisconnecting {
@@ -161,12 +170,18 @@ func (d *Daemon) regenerateRestoredEndpoints(state *endpointRestoreState) {
 			}
 
 			ep.LogStatusOKLocked(endpoint.Other, "Synchronizing endpoint labels with KVStore")
-			if err := d.syncLabels(ep); err != nil {
-				scopedLog.WithError(err).Warn("Unable to restore endpoint")
-				ep.Mutex.Unlock()
-				epRegenerated <- false
-				return
+
+			if ep.SecurityIdentity != nil {
+				if oldSecID := ep.SecurityIdentity.ID; identity.ID != oldSecID {
+					log.WithFields(logrus.Fields{
+						logfields.EndpointID:              ep.ID,
+						logfields.IdentityLabels + ".old": oldSecID,
+						logfields.IdentityLabels + ".new": identity.ID,
+					}).Info("Security label ID for endpoint is different that the one stored, updating")
+				}
 			}
+			ep.SetIdentity(identity)
+
 			ready := ep.SetStateLocked(endpoint.StateWaitingToRegenerate, "Triggering synchronous endpoint regeneration while syncing state to host")
 			ep.Mutex.Unlock()
 
@@ -296,25 +311,6 @@ func readEPsFromDirNames(basePath string, eptsDirNames []string) []*endpoint.End
 
 // syncLabels syncs the labels from the labels' database for the given endpoint.
 // To be used with endpoint.Mutex locked.
-func (d *Daemon) syncLabels(ep *endpoint.Endpoint) error {
-	// Filter the restored labels with the new daemon's filter
-	l, _ := labels.FilterLabels(ep.OpLabels.IdentityLabels())
-	identity, _, err := identityPkg.AllocateIdentity(l)
-	if err != nil {
-		return err
-	}
+func (d *Daemon) syncLabels(ep *endpoint.Endpoint, identity *identityPkg.Identity) {
 
-	if ep.SecurityIdentity != nil {
-		if oldSecID := ep.SecurityIdentity.ID; identity.ID != oldSecID {
-			log.WithFields(logrus.Fields{
-				logfields.EndpointID:              ep.ID,
-				logfields.IdentityLabels + ".old": oldSecID,
-				logfields.IdentityLabels + ".new": identity.ID,
-			}).Info("Security label ID for endpoint is different that the one stored, updating")
-		}
-	}
-
-	ep.SetIdentity(identity)
-
-	return nil
 }

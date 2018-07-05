@@ -42,6 +42,7 @@ spec:
     metadata:
       labels:
         k8s-app: kube-dns
+        io.cilium.fixed-identity: kube-dns
       annotations:
         scheduler.alpha.kubernetes.io/critical-pod: ''
     spec:

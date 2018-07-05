@@ -301,10 +301,7 @@ func TriggerPolicyUpdates(owner endpoint.Owner, force bool) *sync.WaitGroup {
 func HasGlobalCT() bool {
 	eps := GetEndpoints()
 	for _, e := range eps {
-		e.RLock()
-		globalCT := !e.Opts.IsEnabled(option.ConntrackLocal)
-		e.RUnlock()
-		if globalCT {
+		if !e.Opts.IsEnabled(option.ConntrackLocal) {
 			return true
 		}
 	}
