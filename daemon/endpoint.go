@@ -897,55 +897,60 @@ func (d *Daemon) OnIPIdentityCacheChange(modType ipcache.CacheModification, oldI
 // with the in-memory IP-Identity cache.
 func (d *Daemon) OnIPIdentityCacheGC() {
 
-	// This controller ensures that the in-memory IP-identity cache is in-sync
-	// with the BPF map on disk. These can get out of sync if the cilium-agent
-	// is offline for some time, as the maps persist on the BPF filesystem.
-	// In the case that there is some loss of event history in the key-value
-	// store (e.g., compaction in etcd), we cannot rely upon the key-value store
-	// fully to give us the history of all events. As such, periodically check
-	// for inconsistencies in the data-path with that in the agent to ensure
-	// consistent state.
-	controller.NewManager().UpdateController("ipcache-bpf-garbage-collection",
-		controller.ControllerParams{
-			DoFunc: func() error {
+	go func() {
 
-				// Since controllers run asynchronously, need to make sure
-				// IPIdentityCache is not being updated concurrently while we do
-				// GC;
-				ipcache.IPIdentityCache.RLock()
-				defer ipcache.IPIdentityCache.RUnlock()
+		time.Sleep(3 * time.Minute)
 
-				keysToRemove := map[string]*ipCacheBPF.Key{}
+		// This controller ensures that the in-memory IP-identity cache is in-sync
+		// with the BPF map on disk. These can get out of sync if the cilium-agent
+		// is offline for some time, as the maps persist on the BPF filesystem.
+		// In the case that there is some loss of event history in the key-value
+		// store (e.g., compaction in etcd), we cannot rely upon the key-value store
+		// fully to give us the history of all events. As such, periodically check
+		// for inconsistencies in the data-path with that in the agent to ensure
+		// consistent state.
+		controller.NewManager().UpdateController("ipcache-bpf-garbage-collection",
+			controller.ControllerParams{
+				DoFunc: func() error {
 
-				// Add all keys which are in BPF map but not in in-memory cache
-				// to set of keys to remove from BPF map.
-				cb := func(key bpf.MapKey, value bpf.MapValue) {
-					k := key.(*ipCacheBPF.Key)
-					keyToIP := k.String()
+					// Since controllers run asynchronously, need to make sure
+					// IPIdentityCache is not being updated concurrently while we do
+					// GC;
+					ipcache.IPIdentityCache.RLock()
+					defer ipcache.IPIdentityCache.RUnlock()
 
-					// Don't RLock as part of the same goroutine.
-					if _, exists := ipcache.IPIdentityCache.LookupByPrefixRLocked(keyToIP); !exists {
-						// Cannot delete from map during callback because DumpWithCallback
-						// RLocks the map.
-						keysToRemove[keyToIP] = k
+					keysToRemove := map[string]*ipCacheBPF.Key{}
+
+					// Add all keys which are in BPF map but not in in-memory cache
+					// to set of keys to remove from BPF map.
+					cb := func(key bpf.MapKey, value bpf.MapValue) {
+						k := key.(*ipCacheBPF.Key)
+						keyToIP := k.String()
+
+						// Don't RLock as part of the same goroutine.
+						if _, exists := ipcache.IPIdentityCache.LookupByPrefixRLocked(keyToIP); !exists {
+							// Cannot delete from map during callback because DumpWithCallback
+							// RLocks the map.
+							keysToRemove[keyToIP] = k
+						}
 					}
-				}
 
-				if err := ipCacheBPF.IPCache.DumpWithCallback(cb); err != nil {
-					return fmt.Errorf("error dumping ipcache BPF map: %s", err)
-				}
-
-				// Remove all keys which are not in in-memory cache from BPF map
-				// for consistency.
-				for _, k := range keysToRemove {
-					log.WithFields(logrus.Fields{logfields.BPFMapKey: k}).
-						Debug("deleting from ipcache BPF map")
-					if err := ipCacheBPF.IPCache.Delete(k); err != nil {
-						return fmt.Errorf("error deleting key %s from ipcache BPF map: %s", k, err)
+					if err := ipCacheBPF.IPCache.DumpWithCallback(cb); err != nil {
+						return fmt.Errorf("error dumping ipcache BPF map: %s", err)
 					}
-				}
-				return nil
-			},
-			RunInterval: time.Duration(5) * time.Minute,
-		})
+
+					// Remove all keys which are not in in-memory cache from BPF map
+					// for consistency.
+					for _, k := range keysToRemove {
+						log.WithFields(logrus.Fields{logfields.BPFMapKey: k}).
+							Debug("deleting from ipcache BPF map")
+						if err := ipCacheBPF.IPCache.Delete(k); err != nil {
+							return fmt.Errorf("error deleting key %s from ipcache BPF map: %s", k, err)
+						}
+					}
+					return nil
+				},
+				RunInterval: time.Duration(5) * time.Minute,
+			})
+	}()
 }
