@@ -1506,7 +1506,7 @@ func updatePodHostIP(pod *v1.Pod) {
 		return
 	}
 
-	key := bpfIPCache.NewKey(podIP, net.IPMask{})
+	key := bpfIPCache.NewKey(podIP, nil)
 	value := bpfIPCache.RemoteEndpointInfo{
 		SecurityIdentity: uint16(identity.ReservedIdentityCluster),
 	}
@@ -1546,7 +1546,7 @@ func deletePodHostIP(pod *v1.Pod) {
 		return
 	}
 
-	key := bpfIPCache.NewKey(podIP, net.IPMask{})
+	key := bpfIPCache.NewKey(podIP, nil)
 
 	err := bpfIPCache.IPCache.Delete(&key)
 	if err != nil {

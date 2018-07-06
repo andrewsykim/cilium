@@ -124,7 +124,7 @@ type RemoteEndpointInfo struct {
 }
 
 func (v *RemoteEndpointInfo) String() string {
-	return fmt.Sprintf("%d", v.SecurityIdentity)
+	return fmt.Sprintf("tunnel=%s,sec-id=%d", net.IP(v.TunnelEndpoint[:]), v.SecurityIdentity)
 }
 
 // GetValuePtr returns the unsafe pointer to the BPF value.
