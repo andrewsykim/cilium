@@ -1676,55 +1676,119 @@ func (d *Daemon) deleteK8sPodV1(pod *v1.Pod) {
 
 }
 
+func (d *Daemon) updateK8sNodeTunneling(k8sNodeOld, k8sNodeNew *v1.Node) error {
+	logger := log.WithFields(logrus.Fields{
+		"K8sNodeName": k8sNodeNew.ObjectMeta.Name,
+	})
+
+	nodeNew := k8s.ParseNode(k8sNodeNew)
+	// Ignore own node
+	if nodeNew.Name == node.GetName() {
+		return nil
+	}
+
+	getIDs := func(node *node.Node) (*identity.IPIdentityPair, string, error) {
+		if node == nil {
+			return nil, "", nil
+		}
+		hostIP := node.GetNodeIP(false)
+		if ip4 := hostIP.To4(); ip4 == nil {
+			logger.Debugf("Skipping ipcache update, HostIP is not an IPv4 address %s", hostIP)
+			return nil, "", nil
+		}
+
+		ciliumIPStr := k8sNodeNew.GetAnnotations()[annotation.CiliumHostIP]
+		ciliumIP := net.ParseIP(ciliumIPStr)
+		if ciliumIP == nil {
+			return nil, "", fmt.Errorf("no/invalid Cilium-Host IP: %s", ciliumIPStr)
+		}
+
+		id := &identity.IPIdentityPair{
+			IP:     ciliumIP,
+			HostIP: hostIP,
+			ID:     identity.ReservedIdentityCluster,
+		}
+		return id, ciliumIPStr, nil
+	}
+
+	identityPairNew, ciliumIPStrNew, err := getIDs(nodeNew)
+	if err != nil {
+		return err
+	}
+
+	var identityPairOld *identity.IPIdentityPair
+	if k8sNodeOld != nil {
+		nodeOld := k8s.ParseNode(k8sNodeOld)
+		var (
+			ciliumIPStrOld string
+			err            error
+		)
+		identityPairOld, ciliumIPStrOld, err = getIDs(nodeOld)
+		if err != nil {
+			return err
+		}
+
+		if identityPairOld != nil {
+			if identityPairOld.IP.Equal(identityPairNew.IP) &&
+				identityPairOld.HostIP.Equal(identityPairNew.HostIP) {
+				// If both identities are the same, there's no point on
+				// continuing doing any operation.
+				return nil
+			}
+
+			// Delete previous cilium IP for the given node.
+			ipcache.IPIdentityCache.Delete(ciliumIPStrOld)
+		}
+	}
+
+	updated := ipcache.IPIdentityCache.Upsert(ciliumIPStrNew, ipcache.Identity{
+		ID:     identity.ReservedIdentityCluster,
+		Source: ipcache.FromKubernetes,
+	})
+	if !updated {
+		return fmt.Errorf("ipcache entry owned by kvstore or agent")
+	}
+
+	for _, listener := range d.ipcacheListeners {
+		listener.OnIPIdentityCacheChange(ipcache.Upsert, identityPairOld, *identityPairNew)
+	}
+	return nil
+}
+
 func (d *Daemon) addK8sNodeV1(k8sNode *v1.Node) {
+	if err := d.updateK8sNodeTunneling(nil, k8sNode); err != nil {
+		log.WithError(err).Warning("Unable to update tunneling for hostIP")
+	}
+}
+
+func (d *Daemon) updateK8sNodeV1(k8sNodeOld, k8sNodeNew *v1.Node) {
+	d.updateK8sNodeTunneling(k8sNodeOld, k8sNodeNew)
+}
+
+func (d *Daemon) deleteK8sNodeV1(k8sNode *v1.Node) {
 	logger := log.WithFields(logrus.Fields{
 		"K8sNodeName": k8sNode.ObjectMeta.Name,
 	})
 
 	n := k8s.ParseNode(k8sNode)
-	var hostIP net.IP
-	if n.Name != node.GetName() {
-		hostIP = n.GetNodeIP(false)
+	if n == nil {
+		return
 	}
-	ip4 := hostIP.To4()
-	if ip4 == nil {
+	hostIP := n.GetNodeIP(false)
+	if ip4 := hostIP.To4(); ip4 == nil {
 		logger.Debugf("Skipping ipcache update, HostIP is not an IPv4 address %s", hostIP)
 		return
 	}
+	hostIPStr := hostIP.String()
 
-	ciliumIPStr := k8sNode.GetAnnotations()[annotation.CiliumHostIP]
-	ciliumIP := net.ParseIP(ciliumIPStr)
-	if ciliumIP == nil {
-		logger.Errorf("no/invalid Cilium-Host IP: %s", ciliumIPStr)
-		return
+	id, exists := ipcache.IPIdentityCache.LookupByIP(hostIPStr)
+	if !exists {
+		logger.WithField("hostIP", hostIPStr).Debugf("Identity for IP does not exist in case")
 	}
 
-	updated := ipcache.IPIdentityCache.Upsert(ciliumIPStr, ipcache.Identity{
-		ID:     identity.ReservedIdentityCluster,
-		Source: ipcache.FromKubernetes,
-	})
-	if !updated {
-		logger.Errorf("ipcache entry owned by kvstore or agent")
-		return
+	if id.Source != ipcache.FromKubernetes {
+		logger.WithField("hostIP", hostIPStr).Debugf("ipcache entry not owned by kubernetes source")
 	}
 
-	id := identity.IPIdentityPair{
-		IP:     ciliumIP,
-		HostIP: hostIP,
-		ID:     identity.ReservedIdentityCluster,
-	}
-
-	for _, listener := range d.ipcacheListeners {
-		listener.OnIPIdentityCacheChange(ipcache.Upsert, nil, id)
-	}
-}
-
-func (d *Daemon) updateK8sNodeV1(_, k8sNode *v1.Node) {
-	// TODO rely on the kvstore integration?
-	return
-}
-
-func (d *Daemon) deleteK8sNodeV1(k8sNode *v1.Node) {
-	// TODO rely on the kvstore integration?
-	return
+	ipcache.IPIdentityCache.Delete(hostIPStr)
 }
